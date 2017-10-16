@@ -1,0 +1,316 @@
+*&---------------------------------------------------------------------*
+*& Report  ZBC_ORA_INDX_FRAGMENTAITION
+*& 1295200 - Oracle 10g or higher: Space statistics based on DBMS_SPACE
+*&---------------------------------------------------------------------*
+*& HISTORY:
+*&   Written by Nikolay.Shitov@eldorado.ru
+*&   Version 0.9 from 02.10.2017
+*&   aim: get quality indexes/tables in Oracle
+*&---------------------------------------------------------------------*
+
+REPORT  ZBC_ORA_INDX_FRAGMENTAITION.
+*
+*    Structure where tables are saved
+*
+TYPES:  BEGIN OF tSPACE_USAGE,
+          OWNER(30)         TYPE c,
+          TABLESPACE_NAME(30) TYPE c,
+          SEGMENT_NAME(30)  TYPE c,
+          SEGMENT_TYPE(18)  TYPE c,
+          TABLE_NAME(30)    TYPE c,
+          GROSS_MB(22)      TYPE c,
+          NET_MB(22)        TYPE c,
+          UNUSED_MB(22)     TYPE c,
+          PERCENT(10)       TYPE c,
+          CHAIN_PCENT(22)   TYPE c,
+          CHAIN_IMPACT(22)  TYPE c,
+          COMPRESSION(8)    TYPE c,
+          PREFIX_LENGTH(27) TYPE c,  "for compressed indexes/row_num for tables
+        END OF tSPACE_USAGE.
+* Internal table is:
+DATA:   iSPACE_USAGE TYPE tSPACE_USAGE OCCURS 100 WITH HEADER LINE.
+DATA: exc_ref  TYPE REF TO cx_sy_native_sql_error,
+      error_text TYPE string.
+DATA: cTableName(30)  TYPE c,
+      cIndexName(30)  TYPE c,
+      cOWNER(30)      TYPE c,
+      cTABLESPACE_NAME(30) TYPE c,
+      cGROSS_MB(22)   TYPE c,
+      cNET_MB(22)     TYPE c,
+      cUNUSED_MB(22)  TYPE c,
+      cPercent(10)    TYPE c,
+      cCHAIN_PCENT(10)    TYPE c,
+      cCOMPRESSION(8) TYPE c,
+      cPREFIX_LENGTH(27)  TYPE c,
+      cCHAIN_IMPACT(22) TYPE c,
+      cSize(22)       TYPE c,
+      cINDEX_OR_TABLE(10) TYPE c,
+      nRows           TYPE I,
+      GD_PERCENT      TYPE I.
+*
+
+PARAMETERS bIndexes  AS CHECKBOX DEFAULT 'X'.
+PARAMETERS bCompr  AS CHECKBOX DEFAULT 'X'.
+PARAMETERS tabszMB  type c LENGTH 10 DEFAULT '1000'.
+* AUTHORITY CHECK
+  AUTHORITY-CHECK OBJECT 'S_RZL_ADM'
+       ID 'ACTVT' FIELD '01' .
+  IF sy-subrc <> 0.
+    MESSAGE 'Need to have authority  S_RZL_ADM'(112) TYPE 'S'.
+    LEAVE PROGRAM.
+  ENDIF.
+*REPLACE '*' WITH '%' INTO tabname.
+*DATA dba_tables.
+TRY.
+*
+*  All DBA TABLES!
+*
+  IF bIndexes = 'X' and bCompr = 'X'.  " for compressed indexes
+* OWNER, TABLESPACE_NAME, TABLE_NAME, INDEX_NAME, TSIZE_MB, COMPRESSION, PREFIX_LENGTH
+      EXEC SQL.
+        OPEN C1 FOR
+        SELECT t.OWNER, t.TABLESPACE_NAME, t.TABLE_NAME,t.INDEX_NAME,
+          TO_CHAR(ROUND(DECODE(s.extents, 1, s.initial_extent,
+          (s.initial_extent + (s.extents-1) * s.next_extent))/1024000,2),9999990.99) TSIZE_MB,
+          t.COMPRESSION,t.PREFIX_LENGTH
+          FROM dba_indexes t,dba_segments  s
+          WHERE
+                t.OWNER LIKE 'SAP%' AND
+                t.PARTITIONED = 'NO' AND
+                t.TEMPORARY = 'N' AND
+                t.COMPRESSION = 'ENABLED' AND
+                SEGMENT_TYPE LIKE 'INDEX%' AND
+                s.owner = t.owner AND
+                s.segment_name = t.index_name
+       ENDEXEC.
+   ELSEIF bIndexes = 'X'.
+* OWNER, TABLESPACE_NAME, TABLE_NAME, INDEX_NAME, TSIZE_MB, COMPRESSION, INDEX_TYPE
+       EXEC SQL.
+        OPEN C1 FOR
+        SELECT t.OWNER, t.TABLESPACE_NAME, t.TABLE_NAME,t.INDEX_NAME,
+          TO_CHAR(ROUND(DECODE(s.extents, 1, s.initial_extent,
+          (s.initial_extent + (s.extents-1) * s.next_extent))/1024000,2),9999990.99) TSIZE_MB,
+          t.COMPRESSION,t.INDEX_TYPE
+          FROM dba_indexes t,dba_segments  s
+          WHERE
+                t.OWNER LIKE 'SAP%' AND
+                t.PARTITIONED = 'NO' AND
+                t.TEMPORARY = 'N' AND
+                SEGMENT_TYPE LIKE 'INDEX%' AND
+                s.owner = t.owner AND
+                s.segment_name = t.index_name
+       ENDEXEC.
+     ELSEIF bCompr = 'X'. "compressed tables
+* OWNER, TABLESPACE_NAME, TABLE_NAME, INDEX_NAME, TSIZE_MB, COMPRESSION, NUM_ROWS
+        EXEC SQL.
+        OPEN C1 FOR
+         SELECT t.OWNER, t.TABLESPACE_NAME, t.TABLE_NAME,t.CLUSTER_NAME,
+          TO_CHAR(ROUND(DECODE(s.extents, 1, s.initial_extent,
+          (s.initial_extent + (s.extents-1) * s.next_extent))/1024000,2),9999990.99) TSIZE_MB,
+          t.COMPRESSION,t.NUM_ROWS
+          FROM dba_tables t,dba_segments  s
+          WHERE
+                t.OWNER LIKE 'SAP%' AND
+                t.PARTITIONED = 'NO' AND
+                t.TEMPORARY = 'N' AND
+                t.COMPRESSION = 'ENABLED' AND
+                s.owner = t.owner AND
+                s.segment_name = t.table_name AND
+                s.SEGMENT_TYPE LIKE 'TABLE%'
+       ENDEXEC.
+     ELSE.
+* OWNER, TABLESPACE_NAME, TABLE_NAME, INDEX_NAME, TSIZE_MB, COMPRESSION, NUM_ROWS
+        EXEC SQL.
+        OPEN C1 FOR
+         SELECT t.OWNER, t.TABLESPACE_NAME, t.TABLE_NAME,t.CLUSTER_NAME,
+          TO_CHAR(ROUND(DECODE(s.extents, 1, s.initial_extent,
+          (s.initial_extent + (s.extents-1) * s.next_extent))/1024000,2),9999990.99) TSIZE_MB,
+          t.COMPRESSION,t.NUM_ROWS
+          FROM dba_tables t,dba_segments  s
+          WHERE
+                t.OWNER LIKE 'SAP%' AND
+                t.PARTITIONED = 'NO' AND
+                t.TEMPORARY = 'N' AND
+                s.owner = t.owner AND
+                s.segment_name = t.table_name AND
+                s.SEGMENT_TYPE LIKE 'TABLE%'
+       ENDEXEC.
+   ENDIF.
+*
+*             AND ROWNUM < 200
+*             cPREFIX_LENGTH: may be PREFIX_LENTH, INDEX_TYPE or NUM_ROWS.
+  Do.     "append to the iSPACE_USAGE
+    EXEC SQL.
+       FETCH NEXT C1 INTO :cOWNER,:cTABLESPACE_NAME, :cTableName, :cIndexName, :cSize, :cCOMPRESSION, :cPREFIX_LENGTH
+    ENDEXEC.
+    if sy-subrc <> 0.
+      EXIT.
+    ENDIF.
+    DATA: iSize TYPE i.
+    iSize = cSize.
+
+    IF iSize > tabszMB.
+*    write: / :cOWNER, :cTableName,:nSize.
+      iSPACE_USAGE-OWNER = cOWNER.
+      iSPACE_USAGE-COMPRESSION = cCOMPRESSION.
+      iSPACE_USAGE-PREFIX_LENGTH = cPREFIX_LENGTH.
+      IF bIndexes = 'X'.
+        iSPACE_USAGE-SEGMENT_NAME = cIndexName.
+      ELSE.
+        iSPACE_USAGE-SEGMENT_NAME = cTableName.
+      ENDIF.
+      iSPACE_USAGE-TABLE_NAME = cTableName.
+      iSPACE_USAGE-TABLESPACE_NAME = cTABLESPACE_NAME.
+
+      APPEND iSPACE_USAGE.
+    ENDIF.
+  ENDDO.
+  EXEC SQL.
+    CLOSE C1
+  ENDEXEC.
+ CATCH cx_sy_native_sql_error INTO exc_ref.
+    error_text = exc_ref->get_text( ).
+    MESSAGE error_text TYPE 'I'.
+    EXIT.
+ ENDTRY.
+
+ DESCRIBE TABLE iSPACE_USAGE LINES nRows.
+
+ LOOP AT iSPACE_USAGE.
+*
+  PERFORM PROGRESS_BAR USING iSPACE_USAGE-SEGMENT_NAME
+                               SY-TABIX
+                               nRows.
+  TRY.
+      IF bIndexes = 'X'.
+        cINDEX_OR_TABLE = 'INDEX'.
+      ELSE.
+        cINDEX_OR_TABLE = 'TABLE'.
+      ENDIF.
+
+      EXEC SQL.
+        SELECT
+          TO_CHAR(SPACE_ALLOCATED / 1024 / 1024, 999990.99) GROSS_MB,
+          TO_CHAR(SPACE_USED / 1024 / 1024, 999990.99) NET_MB,
+          TO_CHAR((SPACE_ALLOCATED - SPACE_USED) / 1024 / 1024, 999990.99) UNUSED_MB,
+          TO_CHAR((SPACE_ALLOCATED - SPACE_USED) / SPACE_ALLOCATED * 100, 999990.99) PERCENT,
+          CHAIN_PCENT CHAIN_PCENT,
+          TO_CHAR(SPACE_USED / 1024 / 1024 * CHAIN_PCENT / 100, 99999990.99) CHAIN_IMPACT
+        INTO :cGROSS_MB,:cNET_MB,:cUNUSED_MB,:cPercent,:cCHAIN_PCENT,:cCHAIN_IMPACT
+        FROM TABLE(DBMS_SPACE.OBJECT_SPACE_USAGE_TBF(:iSPACE_USAGE-OWNER,:iSPACE_USAGE-SEGMENT_NAME,:cINDEX_OR_TABLE,NULL))
+      ENDEXEC.
+*
+   CATCH cx_sy_native_sql_error INTO exc_ref.
+         error_text = exc_ref->get_text( ).
+         MESSAGE error_text TYPE 'I'.
+         EXIT.
+   ENDTRY.
+   iSPACE_USAGE-GROSS_MB = cGROSS_MB.
+   iSPACE_USAGE-NET_MB = cNET_MB.
+   iSPACE_USAGE-UNUSED_MB = cUNUSED_MB.
+   iSPACE_USAGE-Percent = cPercent.
+   iSPACE_USAGE-CHAIN_PCENT = cCHAIN_PCENT.
+   iSPACE_USAGE-CHAIN_IMPACT = cCHAIN_IMPACT.
+   MODIFY iSPACE_USAGE INDEX sy-tabix .
+ENDLOOP.
+*
+DATA: h0(4)  TYPE c VALUE ' N  ',
+      h1(8) TYPE c VALUE 'OWNER   ',
+      h2(10) TYPE c VALUE 'TABLESPACE',
+      h3(12) TYPE c VALUE 'SEGMENT_NAME',
+      h4(8) TYPE c VALUE 'GROSS_MB',
+      h5(8) TYPE c VALUE 'NET_MB  ',
+      h6(9) TYPE c VALUE 'UNUSED_MB',
+      h7(4)  TYPE c VALUE ' % ',
+      h8(11) TYPE c VALUE 'CHAIN_PCENT',
+      h9(11) TYPE c VALUE 'CHAIN_IMPACT',
+      h10(11) TYPE c VALUE 'COMPRESSION',
+      h11(18) TYPE c VALUE 'PREFIX or ROW_NUMB',
+      n1 TYPE i, n2 TYPE i, n3 TYPE i,
+      x TYPE i.
+
+TOP-OF-PAGE.
+  x = sy-colno.       POSITION x. WRITE h0.
+  x = sy-colno + 1.   POSITION x. WRITE h1.
+  x = sy-colno + 2.   POSITION x. WRITE h2.
+  x = sy-colno + 2.  POSITION x. WRITE h3.
+  x = sy-colno + 8.  POSITION x. WRITE h4.
+  x = sy-colno + 1.   POSITION x. WRITE h5.
+  x = sy-colno + 1.   POSITION x. WRITE h6.
+  x = sy-colno + 1.   POSITION x. WRITE h7.
+  x = sy-colno + 4.   POSITION x. WRITE h8.
+  x = sy-colno + 1.  POSITION x. WRITE h9.
+  x = sy-colno + 1.  POSITION x. WRITE h10.
+  x = sy-colno + 1.  POSITION x. WRITE h11.
+ULINE.
+*
+START-OF-SELECTION.
+*
+SORT iSPACE_USAGE by GROSS_MB DESCENDING PERCENT DESCENDING.
+DATA: iROW TYPE i.
+
+ LOOP AT  iSPACE_USAGE.
+*   IF  iSPACE_USAGE-GROSS_MB >= tabszMB.
+     iROW = iROW + 1.
+     CONDENSE iSPACE_USAGE-SEGMENT_NAME.
+     CONDENSE iSPACE_USAGE-TABLESPACE_NAME.
+     CONDENSE iSPACE_USAGE-GROSS_MB.
+     CONDENSE iSPACE_USAGE-NET_MB.
+     CONDENSE iSPACE_USAGE-UNUSED_MB.
+     CONDENSE iSPACE_USAGE-PERCENT.
+     CONDENSE iSPACE_USAGE-CHAIN_PCENT.
+     CONDENSE iSPACE_USAGE-CHAIN_IMPACT.
+     CONDENSE iSPACE_USAGE-COMPRESSION .
+     CONDENSE iSPACE_USAGE-PREFIX_LENGTH.
+
+     WRITE: /   iROW LEFT-JUSTIFIED       UNDER h0,
+                iSPACE_USAGE-OWNER        UNDER h1,
+                iSPACE_USAGE-TABLESPACE_NAME UNDER h2,
+                iSPACE_USAGE-SEGMENT_NAME UNDER h3,
+                iSPACE_USAGE-GROSS_MB     UNDER h4,
+                iSPACE_USAGE-NET_MB       UNDER h5,
+                iSPACE_USAGE-UNUSED_MB    UNDER h6,
+                iSPACE_USAGE-PERCENT      UNDER h7,
+                iSPACE_USAGE-CHAIN_PCENT  UNDER h8,
+                iSPACE_USAGE-CHAIN_IMPACT UNDER h9,
+                iSPACE_USAGE-COMPRESSION  UNDER h10,
+                iSPACE_USAGE-PREFIX_LENGTH UNDER h11.
+*   ELSE.
+*     iZERO = iZERO + 1.
+*   ENDIF.
+*        WRITE: /   iCNT, 'Written tables'.
+ ENDLOOP.
+WRITE: /   iROW, ':Total'.
+IF bIndexes = 'X'.
+  WRITE: /  'Please, use RSANAORA to index rebuild'.
+ENDIF.
+
+*
+*&---------------------------------------------------------------------*
+*&      Form  PROGRESS_BAR
+*&      https://wiki.scn.sap.com/wiki/display/ABAP/Progress+Bar+in+SAP
+*&---------------------------------------------------------------------*
+FORM PROGRESS_BAR USING    P_VALUE
+                           P_TABIX
+                           P_NLINES.
+  DATA: W_TEXT(40),
+        W_PERCENTAGE TYPE P,
+        W_PERCENT_CHAR(3).
+  W_PERCENTAGE = ( P_TABIX / P_NLINES ) * 100.
+  W_PERCENT_CHAR = W_PERCENTAGE.
+  SHIFT W_PERCENT_CHAR LEFT DELETING LEADING ' '.
+  CONCATENATE P_VALUE '....' W_PERCENT_CHAR '% Complete'(002) INTO W_TEXT.
+* This check needs to be in otherwise when looping around big tables
+* SAP will re-display indicator too many times causing report to run
+* very slow. (No need to re-display same percentage anyway)
+  IF W_PERCENTAGE GT GD_PERCENT OR P_TABIX EQ 1.
+    CALL FUNCTION 'SAPGUI_PROGRESS_INDICATOR'
+      EXPORTING
+        PERCENTAGE = W_PERCENTAGE
+        TEXT       = W_TEXT.
+    GD_PERCENT = W_PERCENTAGE.
+
+    MESSAGE W_TEXT TYPE 'S'.
+    commit WORK.
+  ENDIF.
+ENDFORM.                    " PROGRESS_BAR

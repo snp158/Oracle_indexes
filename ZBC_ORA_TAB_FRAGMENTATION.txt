@@ -1,0 +1,190 @@
+*&---------------------------------------------------------------------*
+*& Report  ZBC_ORA_TAB_FRAGMENTAITION
+*& 1295200 - Oracle 10g or higher: Space statistics based on DBMS_SPACE
+*&---------------------------------------------------------------------*
+*& HISTORY:
+*&   Written by Nikolay.Shitov@eldorado.ru
+*&   Version 0.9 from 18.06.2014
+*&
+*&---------------------------------------------------------------------*
+REPORT  ZBC_ORA_TAB_FRAGMENTATION LINE-SIZE 255.
+*
+*    Structure where tables are saved
+*
+TYPES:  BEGIN OF tSPACE_USAGE,
+          OWNER(30)         TYPE c,
+          TABLESPACE_NAME(30) TYPE c,
+          SEGMENT_NAME(30)  TYPE c,
+          SEGMENT_TYPE(18)  TYPE c,
+          GROSS_MB(10)      TYPE c,
+          NET_MB(10)        TYPE c,
+          UNUSED_MB(10)     TYPE c,
+          PERCENT(10)       TYPE c,   "%
+          CHAIN_PCENT       TYPE N,
+          CHAIN_IMPACT(10)  TYPE c,   "%
+        END OF tSPACE_USAGE.
+* Internal table is:
+DATA:   iSPACE_USAGE TYPE tSPACE_USAGE OCCURS 100 WITH HEADER LINE.
+DATA: exc_ref  TYPE REF TO cx_sy_native_sql_error,
+      error_text TYPE string.
+DATA: cTableName(30) TYPE c,
+      cOWNER(30) TYPE c,
+      cTABLESPACE_NAME(30) TYPE c,
+      cGROSS_MB(10) TYPE c,
+      cNET_MB(10) TYPE c,
+      cUNUSED_MB(10) TYPE c,
+      cPercent(10) TYPE c,
+      nCHAIN_PCENT   TYPE n,
+      cCHAIN_IMPACT(10) TYPE c,
+      cSize(10) TYPE c.
+*
+PARAMETERS tabszMB  type c LENGTH 10 DEFAULT '1000'.
+
+* AUTHORITY CHECK
+  AUTHORITY-CHECK OBJECT 'S_RZL_ADM'
+       ID 'ACTVT' FIELD '01' .
+  IF sy-subrc <> 0.
+    MESSAGE 'Need to have authority  S_RZL_ADM'(112) TYPE 'S'.
+    LEAVE PROGRAM.
+  ENDIF.
+
+*REPLACE '*' WITH '%' INTO tabname.
+*DATA dba_tables.
+TRY.
+*
+*  All DBA TABLES!
+*
+  EXEC SQL.
+    OPEN C1 FOR
+     SELECT t.OWNER, t.TABLESPACE_NAME, t.TABLE_NAME,
+      TO_CHAR(ROUND(DECODE(s.extents, 1, s.initial_extent,
+      (s.initial_extent + (s.extents-1) * s.next_extent))/1024000,2),999990.99) TSIZE_MB
+      FROM dba_tables t,dba_segments  s
+      WHERE
+            t.OWNER LIKE 'SAP%' AND
+            t.PARTITIONED = 'NO' AND
+            t.TEMPORARY = 'N' AND
+            s.owner = t.owner AND
+            s.segment_name = t.table_name
+   ENDEXEC.
+*
+*             AND ROWNUM < 200
+*
+  Do.     "append to the iSPACE_USAGE
+    EXEC SQL.
+       FETCH NEXT C1 INTO :cOWNER,:cTABLESPACE_NAME, :cTableName,:cSize.
+    ENDEXEC.
+    if sy-subrc <> 0.
+      EXIT.
+    ENDIF.
+    DATA: iSize TYPE i.
+    iSize = cSize.
+
+    IF iSize > tabszMB.
+*    write: / :cOWNER, :cTableName,:nSize.
+      iSPACE_USAGE-OWNER = :cOWNER.
+      iSPACE_USAGE-SEGMENT_NAME = :cTableName.
+      iSPACE_USAGE-TABLESPACE_NAME = cTABLESPACE_NAME.
+      APPEND iSPACE_USAGE.
+    ENDIF.
+  ENDDO.
+  EXEC SQL.
+    CLOSE C1
+  ENDEXEC.
+ CATCH cx_sy_native_sql_error INTO exc_ref.
+    error_text = exc_ref->get_text( ).
+    MESSAGE error_text TYPE 'I'.
+    EXIT.
+ ENDTRY.
+*
+LOOP AT iSPACE_USAGE.
+*
+  TRY.
+      EXEC SQL.
+        SELECT
+          TO_CHAR(SPACE_ALLOCATED / 1024 / 1024, 999990.99) GROSS_MB,
+          TO_CHAR(SPACE_USED / 1024 / 1024, 999990.99) NET_MB,
+          TO_CHAR((SPACE_ALLOCATED - SPACE_USED) / 1024 / 1024, 999990.99) UNUSED_MB,
+          TO_CHAR((SPACE_ALLOCATED - SPACE_USED) / SPACE_ALLOCATED * 100, 999990.99) PERCENT,
+          CHAIN_PCENT CHAIN_PCENT,
+          TO_CHAR(SPACE_USED / 1024 / 1024 * CHAIN_PCENT / 100, 99999990.99) CHAIN_IMPACT
+        INTO :cGROSS_MB,:cNET_MB,:cUNUSED_MB,:cPercent,:nCHAIN_PCENT,:cCHAIN_IMPACT
+        FROM TABLE(DBMS_SPACE.OBJECT_SPACE_USAGE_TBF(:iSPACE_USAGE-OWNER,:iSPACE_USAGE-SEGMENT_NAME,'TABLE',NULL))
+      ENDEXEC.
+   CATCH cx_sy_native_sql_error INTO exc_ref.
+         error_text = exc_ref->get_text( ).
+         MESSAGE error_text TYPE 'I'.
+         EXIT.
+   ENDTRY.
+   iSPACE_USAGE-GROSS_MB = cGROSS_MB.
+   iSPACE_USAGE-NET_MB = cNET_MB.
+   iSPACE_USAGE-UNUSED_MB = cUNUSED_MB.
+   iSPACE_USAGE-Percent = cPercent.
+   iSPACE_USAGE-CHAIN_PCENT = nCHAIN_PCENT.
+   iSPACE_USAGE-CHAIN_IMPACT = cCHAIN_IMPACT.
+   MODIFY iSPACE_USAGE INDEX sy-tabix .
+ENDLOOP.
+*
+DATA: h0(4)  TYPE c VALUE ' N  ',
+      h1(8) TYPE c VALUE 'OWNER   ',
+      h2(10) TYPE c VALUE 'TABLESPACE',
+      h3(12) TYPE c VALUE 'TABLE_NAME',
+      h4(8) TYPE c VALUE 'GROSS_MB',
+      h5(8) TYPE c VALUE 'NET_MB  ',
+      h6(9) TYPE c VALUE 'UNUSED_MB',
+      h7(4)  TYPE c VALUE ' % ',
+      h8(11) TYPE c VALUE 'CHAIN_PCENT',
+      h9(11) TYPE c VALUE 'CHAIN_IMPACT',
+      n1 TYPE i, n2 TYPE i, n3 TYPE i,
+      x TYPE i.
+
+TOP-OF-PAGE.
+  x = sy-colno.       POSITION x. WRITE h0.
+  x = sy-colno + 4.   POSITION x. WRITE h1.
+  x = sy-colno + 6.   POSITION x. WRITE h2.
+  x = sy-colno + 8.  POSITION x. WRITE h3.
+  x = sy-colno + 10.  POSITION x. WRITE h4.
+  x = sy-colno + 4.   POSITION x. WRITE h5.
+  x = sy-colno + 4.   POSITION x. WRITE h6.
+  x = sy-colno + 4.   POSITION x. WRITE h7.
+  x = sy-colno + 4.   POSITION x. WRITE h8.
+  x = sy-colno + 4.  POSITION x. WRITE h9.
+ULINE.
+*
+START-OF-SELECTION.
+*
+SORT iSPACE_USAGE by GROSS_MB DESCENDING PERCENT DESCENDING.
+DATA: iROW TYPE i.
+
+ LOOP AT  iSPACE_USAGE.
+*   IF  iSPACE_USAGE-GROSS_MB >= tabszMB.
+     iROW = iROW + 1.
+     CONDENSE iSPACE_USAGE-SEGMENT_NAME.
+     CONDENSE iSPACE_USAGE-TABLESPACE_NAME.
+     CONDENSE iSPACE_USAGE-GROSS_MB.
+     CONDENSE iSPACE_USAGE-NET_MB.
+     CONDENSE iSPACE_USAGE-UNUSED_MB.
+     CONDENSE iSPACE_USAGE-PERCENT.
+     CONDENSE iSPACE_USAGE-CHAIN_PCENT.
+     CONDENSE iSPACE_USAGE-CHAIN_IMPACT.
+
+     WRITE: /   iROW LEFT-JUSTIFIED       UNDER h0,
+                iSPACE_USAGE-OWNER        UNDER h1,
+                iSPACE_USAGE-TABLESPACE_NAME UNDER h2,
+                iSPACE_USAGE-SEGMENT_NAME UNDER h3,
+                iSPACE_USAGE-GROSS_MB     UNDER h4,
+                iSPACE_USAGE-NET_MB       UNDER h5,
+                iSPACE_USAGE-UNUSED_MB    UNDER h6,
+                iSPACE_USAGE-PERCENT      UNDER h7,
+                iSPACE_USAGE-CHAIN_PCENT  UNDER h8,
+                iSPACE_USAGE-CHAIN_IMPACT UNDER h9.
+*   ELSE.
+*     iZERO = iZERO + 1.
+*   ENDIF.
+*        WRITE: /   iCNT, 'Written tables'.
+ ENDLOOP.
+WRITE: /   iROW, ':tables'.
+
+*   free iSPACE_USAGE.
+* CLEAR iSPACE_USAGE.
+*
